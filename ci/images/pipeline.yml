@@ -9,25 +9,44 @@ resources:
     - ci/
 
 jobs:
-- name: build-image
+- name: build-ci-image
   plan:
   - get: ci-repo
     params:
       submodules: none
   - task: build
+    file: ci-repo/ci/tasks/build-image/task.yml
+    input_mapping:
+      input: ci-repo
+    params:
+      NIMBUS_USER: ((ci/nimbus.user))
+      BUILD_ARG_BASE: ((dockerhub-proxy))/library/debian:stable-slim
+      CONTEXT: input/ci/images/ci-image
+
+- name: build-docker-image
+  plan:
+  - get: ci-repo
+    params:
+      submodules: none
+  - task: build
+    file: ci-repo/ci/tasks/build-image/task.yml
+    input_mapping:
+      input: ci-repo
+    params:
+      NIMBUS_USER: ((ci/nimbus.user))
+      BUILD_ARG_BASE: devtools-docker.artifactory.eng.vmware.com/vmware/runway/resourcetypes/docker-in-nimbus-task:0.13.0
+      CONTEXT: input/ci/images/docker-image
+      UNPACK_ROOTFS: true
+
+  - task: test
+    image: image
     config:
       platform: linux
-      image_resource:
-        type: registry-image
-        source:
-          repository: devtools-docker.artifactory.eng.vmware.com/vmware/runway/resourcetypes/docker-in-nimbus-task
-          tag: 0.12.0 # please pick a tag up to date
-      params:
-        NIMBUS_USER: ((ci/nimbus.user))
-        CONTEXT: ci-repo/ci/images/
-      inputs:
-      - name: ci-repo
-      outputs:
-      - name: image
       run:
-        path: build
+        path: bash
+        args:
+        - -c
+        - |
+          exit 1
+    params:
+      NIMBUS_DEPLOY_OPTS: '--memory=4096 --disk=10485760 --cpus=4'

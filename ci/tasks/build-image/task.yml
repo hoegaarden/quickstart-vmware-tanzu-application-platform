@@ -1,0 +1,83 @@
+#! https://gitlab.eng.vmware.com/devtools/runway/concourse/resourcetypes/official/docker-in-nimbus-task/
+---
+platform: linux
+image_resource:
+  type: registry-image
+  source:
+    repository: devtools-docker.artifactory.eng.vmware.com/vmware/runway/resourcetypes/docker-in-nimbus-task
+    tag: 0.13.0
+
+inputs:
+- name: input
+
+outputs:
+- name: image
+
+run:
+  path: build
+
+#! #! originally from: https://github.com/EngineerBetter/concourse-tasks/blob/e7b2b43756c828c8c13df1f4512349e9febe0da4/build-oci-image-unprivileged/task.yml
+#! ---
+#! platform: linux
+#! image_resource:
+#!   type: registry-image
+#!   source:
+#!     # repository: engineerbetter/kaniko
+#!     repository: harbor-repo.vmware.com/dockerhub-proxy-cache/engineerbetter/kaniko
+#! 
+#! inputs:
+#! - name: input
+#! 
+#! outputs:
+#! - name: image
+#! - name: rootfs
+#! 
+#! run:
+#!   path: /busybox/ash
+#!   args:
+#!   - -euc
+#!   - |
+#!     buildDir="$PWD"
+#! 
+#!     build_args_flags=""
+#!     for var in $(echo $BUILD_ARGS | sed "s/,/ /g"); do
+#!       build_args_flags="${build_args_flags} --build-arg=${var}"
+#!     done
+#! 
+#!     target_flag=""
+#!     if [ -n "$TARGET" ]; then
+#!       target_flag="--target ${TARGET}"
+#!     fi
+#! 
+#!     /kaniko/executor \
+#!       --no-push \
+#!       --context="dir://${buildDir}/input/${CONTEXT}" \
+#!       --tarPath="${buildDir}/image/image.tar" \
+#!       --destination="${IMAGE_NAME}:${TAG}" \
+#!       --dockerfile="${DOCKERFILE}" \
+#!       --reproducible \
+#!       ${build_args_flags} \
+#!       ${target_flag}
+#! 
+#!     if [ -n "$UNPACK_ROOTFS" ] ; then
+#!       echo >&2 "## unpacking rootfs"
+#!       rootfsDir="${buildDir}/rootfs"
+#!       mkdir -p "${rootfsDir}/rootfs"
+#!       find /kaniko/ \
+#!         -mindepth 1 -maxdepth 1 \
+#!         -type f \
+#!         -newer /kaniko/Dockerfile \
+#!         -exec tar -C "${rootfsDir}/rootfs" -xf '{}' \;
+#!       echo "$UNPACK_ROOTFS_META" > "${rootfsDir}/metadata.json"
+#!     fi
+#! 
+#! params:
+#!   BUILD_ARGS: #comma-separated list, e.g. foo=bar,foz=baz
+#!   CONTEXT: "."
+#!   DOCKERFILE: Dockerfile
+#!   IMAGE_NAME: local-tarball
+#!   TAG: latest
+#!   TARGET:
+#!   UNPACK_ROOTFS:
+#!   UNPACK_ROOTFS_META: |
+#!     {}
