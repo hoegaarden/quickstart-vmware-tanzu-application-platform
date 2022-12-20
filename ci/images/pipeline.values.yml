@@ -1,0 +1,4 @@
+repo:
+  uri: git@github.com:hoegaarden/quickstart-vmware-tanzu-application-platform
+  branch: horlh/ci
+  ro-key: ((ci/repo-keys/github/hoegaarden/quickstart-vmware-tanzu-application-platform.ro))

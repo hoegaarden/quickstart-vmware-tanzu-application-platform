@@ -1,0 +1,33 @@
+resources:
+- name: ci-repo
+  type: git
+  source:
+    uri: ((repo.uri))
+    branch: ((repo.branch))
+    private_key: ((repo.ro-key))
+    paths:
+    - ci/
+
+jobs:
+- name: build-image
+  plan:
+  - get: ci-repo
+    params:
+      submodules: none
+  - task: build
+    config:
+      platform: linux
+      image_resource:
+        type: registry-image
+        source:
+          repository: devtools-docker.artifactory.eng.vmware.com/vmware/runway/resourcetypes/docker-in-nimbus-task
+          tag: 0.12.0 # please pick a tag up to date
+      params:
+        NIMBUS_USER: ((ci/nimbus.user))
+        CONTEXT: ci-repo/ci/images/
+      inputs:
+      - name: ci-repo
+      outputs:
+      - name: image
+      run:
+        path: build
