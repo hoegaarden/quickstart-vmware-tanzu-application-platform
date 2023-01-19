@@ -5,6 +5,8 @@ repo: &repo
 
 ci-repo:
   << : *repo
+  slug: hoegaarden/quickstart-vmware-tanzu-application-platform
+  branch: ci-tmp
   #! e.g. branch: ci
 
 dockerhub-proxy: harbor-repo.vmware.com/dockerhub-proxy-cache
