@@ -10,8 +10,8 @@ import (
 
 func ExecuteContext(ctx context.Context) error {
 	var (
-		cfg    aws.Config
-		region string
+		awsConfig aws.Config
+		region    string
 	)
 
 	var rootCmd = &cobra.Command{
@@ -21,12 +21,12 @@ func ExecuteContext(ctx context.Context) error {
 
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			var err error
-			cfg, err = config.LoadDefaultConfig(cmd.Context())
+			awsConfig, err = config.LoadDefaultConfig(cmd.Context())
 			if err != nil {
 				return err
 			}
 			if region != "" {
-				cfg.Region = region
+				awsConfig.Region = region
 			}
 
 			return nil
@@ -35,7 +35,7 @@ func ExecuteContext(ctx context.Context) error {
 
 	rootCmd.PersistentFlags().StringVar(&region, "region", "", "the AWS region to run against")
 
-	rootCmd.AddCommand(createQuotaCheckCmd(&cfg))
+	rootCmd.AddCommand(createQuotaCheckCmd(&awsConfig))
 
 	return rootCmd.ExecuteContext(ctx)
 }

@@ -2,84 +2,53 @@ package quota
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/service/servicequotas"
 )
 
-const (
-	pageSize = 100
-)
-
-//counterfeiter:generate . ServiceQuotaClient
-type ServiceQuotaClient interface {
-	ListServiceQuotas(ctx context.Context, params *servicequotas.ListServiceQuotasInput, optFns ...func(*servicequotas.Options)) (*servicequotas.ListServiceQuotasOutput, error)
+//counterfeiter:generate . ServiceQuotaGetterClient
+type ServiceQuotaGetterClient interface {
+	GetServiceQuota(context.Context, *servicequotas.GetServiceQuotaInput, ...func(*servicequotas.Options)) (*servicequotas.GetServiceQuotaOutput, error)
 }
 
-func NewServiceQuotaCodes(context context.Context, client ServiceQuotaClient, serviceCode string) *ServiceQuotaCodes {
-	return &ServiceQuotaCodes{
-		ctx:         context,
-		client:      client,
-		serviceCode: serviceCode,
+//counterfeiter:generate . ServicQuotaCodeGetter
+type ServiceQuotaCodeGetter interface {
+	Get(string) (string, error)
+	ServiceCode() string
+}
+
+func NewGetter(ctx context.Context, client ServiceQuotaGetterClient, quotaCodeGetter ServiceQuotaCodeGetter) *Quotas {
+	return &Quotas{
+		ctx:    ctx,
+		client: client,
+
+		quotaCodeGetter: quotaCodeGetter,
 	}
 }
 
-type ServiceQuotaCodes struct {
-	client      ServiceQuotaClient
-	serviceCode string
-	ctx         context.Context
+type Quotas struct {
+	ctx    context.Context
+	client ServiceQuotaGetterClient
 
-	once       sync.Once
-	onceErr    error
-	quotaCodes map[string]string
+	quotaCodeGetter ServiceQuotaCodeGetter
 }
 
-var ErrNotFound = errors.New("Resource was not found")
-
-func (s *ServiceQuotaCodes) MustGet(serviceQuotaName string) string {
-	val, err := s.Get(serviceQuotaName)
-
+func (q *Quotas) Get(quotaName string) (int, error) {
+	quotaCode, err := q.quotaCodeGetter.Get(quotaName)
 	if err != nil {
-		panic(err)
+		return 0, fmt.Errorf("getting service quota code: %w", err)
 	}
 
-	return val
-}
+	serviceCode := q.quotaCodeGetter.ServiceCode()
 
-func (s *ServiceQuotaCodes) Get(serviceQuotaName string) (string, error) {
-	s.once.Do(s.loadAllCodes)
-
-	if s.onceErr != nil {
-		return "", s.onceErr
-	}
-
-	quotaCode, ok := s.quotaCodes[serviceQuotaName]
-	if !ok {
-		return "", fmt.Errorf("getting service quota code for service quota name %q: %w", serviceQuotaName, ErrNotFound)
-	}
-	return quotaCode, nil
-}
-
-func (s *ServiceQuotaCodes) loadAllCodes() {
-	s.quotaCodes = map[string]string{}
-
-	params := &servicequotas.ListServiceQuotasInput{
-		ServiceCode: &s.serviceCode,
-	}
-	paginator := servicequotas.NewListServiceQuotasPaginator(s.client, params, func(o *servicequotas.ListServiceQuotasPaginatorOptions) {
-		o.Limit = pageSize
+	quota, err := q.client.GetServiceQuota(q.ctx, &servicequotas.GetServiceQuotaInput{
+		ServiceCode: &serviceCode,
+		QuotaCode:   &quotaCode,
 	})
-
-	for paginator.HasMorePages() {
-		o, err := paginator.NextPage(s.ctx)
-		if err != nil {
-			s.onceErr = err
-			return
-		}
-		for _, v := range o.Quotas {
-			s.quotaCodes[*v.QuotaName] = *v.QuotaCode
-		}
+	if err != nil {
+		return 0, fmt.Errorf("getting quota: %w", err)
 	}
+
+	return int(*quota.Quota.Value), nil
 }

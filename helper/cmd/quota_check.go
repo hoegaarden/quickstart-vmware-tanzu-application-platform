@@ -9,7 +9,7 @@ import (
 	"github.com/vmware-tap-on-public-cloud/quickstart-vmware-tanzu-application-platform/helper/pkg/quota"
 )
 
-func createQuotaCheckCmd(cfg *aws.Config) *cobra.Command {
+func createQuotaCheckCmd(awsConfig *aws.Config) *cobra.Command {
 	return &cobra.Command{
 		Use:     "quota-check",
 		Aliases: []string{"quota", "qc"},
@@ -18,22 +18,21 @@ func createQuotaCheckCmd(cfg *aws.Config) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
-			client := servicequotas.NewFromConfig(*cfg)
+			client := servicequotas.NewFromConfig(*awsConfig)
 
-			quotaCodesEC2 := quota.NewServiceQuotaCodes(ctx, client, "ec2")
+			quotas := quota.NewGetter(ctx, client, quota.NewServiceQuotaCodes(ctx, client, "ec2"))
 
-			vpcVipCode, err := quotaCodesEC2.Get("EC2-VPC Elastic IPs")
+			val, err := quotas.Get("EC2-VPC Elastic IPs")
 			if err != nil {
 				return err
 			}
 
-			vpcVipQuota, err := client.GetServiceQuota(ctx, &servicequotas.GetServiceQuotaInput{
-				ServiceCode: p("ec2"),
-				QuotaCode:   p(vpcVipCode),
-			})
-
-			if val, expected := int(*vpcVipQuota.Quota.Value), 100; val < expected {
-				return fmt.Errorf("Expected quota '%s' to be greater or equal to %d, but got %d", "EC2-VPC Elastic IPs", expected, val)
+			expected := 100
+			if val <= expected {
+				return ExitCodeError{
+					Message: fmt.Sprintf("Expected quota '%s' to be greater or equal to %d, but got %d", "EC2-VPC Elastic IPs", expected, val),
+					Code:    42,
+				}
 			}
 
 			return nil
