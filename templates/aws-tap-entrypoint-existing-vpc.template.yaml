@@ -2013,9 +2013,123 @@ Resources:
 # roles multi cluster end
   UbuntuBastionLaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
-    Metadata: {}
-      #! AWS::EC2::LaunchTemplate:
-      #! AWS::CloudFormation::Authentication:
+    Metadata:
+      # AWS::CloudFormation::Authentication:
+      #   S3AccessCreds:
+      #     type: S3
+      #     roleName: !Ref LinuxBastionIamRole
+      #     buckets:
+      #       - !If [UsingDefaultBucket, !Sub '${QSS3BucketName}-${AWS::Region}', !Ref QSS3BucketName]
+      AWS::CloudFormation::Init:
+        config:
+          # Note: any `aws s3 copy` we do inline could be done here.
+          # sources:
+          #   cloud-init.sh: !Sub
+          #     - https://${S3Bucket}.s3.${S3Region}.${AWS::URLSuffix}/${QSS3KeyPrefix}/tap-setup-scripts/src/cloud-init.sh
+          #     - S3Bucket: !If [UsingDefaultBucket, !Sub '${QSS3BucketName}-${AWS::Region}', !Ref QSS3BucketName]
+          #       S3Region: !If [UsingDefaultBucket, !Ref AWS::Region, !Ref QSS3BucketRegion]
+          # files: {}
+          commands:
+            cloud-init:
+              env:
+                TAPVersion:    !FindInMap [ Versions, current, TAP ]
+                TAPDomainName: !Ref TAPDomainName
+                TAPRepo:       tanzu-application-platform/tap-packages
+                TAPLogGroup:   !Ref TAPLogGroup
+                ClusterArch:   !Ref TAPClusterArch
+
+                TanzuNetRegistryServer:    !FindInMap [TanzuNetRegistryServer, Server, Name]
+                TanzuNetRelocateImages:    !Ref TanzuNetRelocateImages
+                TanzuNetSecretCredentials: !Ref TanzuNetSecretCredentials
+
+                ClusterEssentialsBundleRepo:     tanzu-cluster-essentials/cluster-essentials-bundle
+                ClusterEssentialsBundleFileHash: !FindInMap [ Versions, current, ClusterEssentialsHash ]
+                ClusterEssentialsBundleVersion:  !FindInMap [ Versions, current, ClusterEssentialsVersion ]
+
+                TAPClusterEssentialsBundleRepo_RepositoryUri: !GetAtt TAPClusterEssentialsBundleRepo.RepositoryUri
+                TAPBuildServiceRepo_RepositoryUri:            !GetAtt TAPBuildServiceRepo.RepositoryUri
+                TAPPackagesRepo_RepositoryUri:                !GetAtt TAPPackagesRepo.RepositoryUri
+                TAPWorkloadRepo_RepositoryUri:                !GetAtt TAPWorkloadRepo.RepositoryUri
+
+                AwsKubectlVersion:     !FindInMap [ Versions, current, Kubectl ]
+                DockerCredPassVersion: !FindInMap [ Versions, current, DockerCredPass ]
+                PivNetVersion:         !FindInMap [ Versions, current, PivNet ]
+
+                SampleAppConfig:    !FindInMap [Apps, Sample, Config]
+                SampleAppNamespace: !FindInMap [Apps, Sample, Namespace]
+                SampleAppName:      !FindInMap [Apps, Sample, Name]
+
+                QSS3BucketPath: !Sub
+                  - s3://${S3Bucket}/${QSS3KeyPrefix}tap-setup-scripts
+                  - S3Bucket: !If [UsingDefaultBucket, !Sub '${QSS3BucketName}-${AWS::Region}', !Ref QSS3BucketName]
+
+                EKSClusterName: !Ref EKSClusterName
+
+                BuildClusterName:            !If [CreateMultiCluster, !GetAtt BUILDEKSQSStack.Outputs.EKSClusterName, !GetAtt EKSQSStack.Outputs.EKSClusterName]
+                BuildClusterBuildServiceArn: !If [CreateMultiCluster, !GetAtt BUILDBuildServiceIamRole.Arn, !GetAtt TAPBuildServiceIamRole.Arn]
+                BuildClusterWorkloadArn:     !If [CreateMultiCluster, !GetAtt BUILDWorkloadIamRole.Arn, !GetAtt TAPWorkloadIamRole.Arn]
+
+                IterateClusterName:            !If [CreateMultiCluster, !GetAtt ITERATEEKSQSStack.Outputs.EKSClusterName, ""]
+                IterateClusterBuildServiceArn: !If [CreateMultiCluster, !GetAtt ITERATEBuildServiceIamRole.Arn, ""]
+                IterateClusterWorkloadArn:     !If [CreateMultiCluster, !GetAtt ITERATEWorkloadIamRole.Arn, ""]
+
+                RunClusterName: !If [CreateMultiCluster, !GetAtt RUNEKSQSStack.Outputs.EKSClusterName, ""]
+
+                ViewClusterName: !If [CreateMultiCluster, !GetAtt VIEWEKSQSStack.Outputs.EKSClusterName, ""]
+
+                PrivateHostedZone: !Ref PrivateHostedZone
+
+                CloudInitHandle:          !Ref PhaseCloudInitHandle
+                TAPInstallHandle:         !Ref PhaseTAPInstallHandle
+                TAPWorkloadInstallHandle: !Ref PhaseTAPWorkloadInstallHandle
+                TAPTestsHandle:           !Ref PhaseTAPTestsHandle
+
+                AWS_REGION:   !Ref AWS::Region
+                AWSAccountID: !Ref AWS::AccountId
+
+                #! root's PATH, not sure why it's not set in the context of cfn-init
+                PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin
+              command:
+                #! commands run with `/bin/sh`, but bash rules everything around me
+                - bash
+                - -c
+                - |
+                  set -e
+                  set -u
+                  set -o pipefail
+
+                  set -x
+
+                  cfnSignal() {
+                    local -
+                    set +x
+
+                    local rc="${1:-42}"
+                    local handleURL="${2:-${CloudInitHandle}}"
+                    local reason='installation succeeded'
+
+                    (( rc != 0 )) && {
+                      #! give cfn-init a chance to spit out the buffered logs
+                      #! to the log file; not great :(
+                      sleep 5
+
+                      #! get the last 10 lines of the log
+                      reason=$'\n'"$( tail -n 10 /var/log/cfn-init-cmd.log )"$'\n'
+                    }
+
+                    cfn-signal --region "${AWS_REGION}" --exit-code "$rc" --reason "$reason" "$handleURL" \
+                      || echo >&2 'could not run cfn-signal'
+                  }
+                  export -f cfnSignal
+                  trap 'cfnSignal $?' ERR
+
+                  cInit="${QSS3BucketPath}/src/cloud-init.sh"
+                  echo >&2 "kicking off cloud-init from '${cInit}'"
+                  bash -xe <(
+                    aws s3 cp --no-progress "${cInit}" -
+                  )
+
+                  cfnSignal 0
     Properties:
       LaunchTemplateData:
         SecurityGroupIds:
@@ -2039,26 +2153,8 @@ Resources:
           #! Troy: [...] you also need to set the hop limit to 2, because the default of 1 effectively disables EC2 host profile authentication [...]
           HttpPutResponseHopLimit: 2
           HttpTokens: required
-  UbuntuBastion:
-  # TODO: Implement CloudFormation helper scripts once Ubuntu 22.04 is
-  # supported.
-    Type: AWS::EC2::Instance
-    Metadata:
-      cfn-lint: { config: { ignore_checks: [I3042] } }
-    Properties:
-      LaunchTemplate:
-        LaunchTemplateId: !Ref UbuntuBastionLaunchTemplate
-        Version: !GetAtt [UbuntuBastionLaunchTemplate, DefaultVersionNumber]
-      SubnetId: !Ref PublicSubnet1Id
-      Tags:
-        - Key: Name
-          Value: VMwareLinuxBastionInstance
-        - Key: Description
-          Value: >-
-            VMware Tanzu Application Platform EKS cluster bootstrap instance.
-      UserData:
-        Fn::Base64: !Sub
-          - |
+        UserData:
+          Fn::Base64: !Sub |
             #!/bin/bash
             set -e
             set -u
@@ -2072,53 +2168,6 @@ Resources:
             EOF
             . /etc/environment
             export AWS_REGION AWS_DEFAULT_REGION
-
-            set +x
-              # TODO: we should ensure to
-              #       - only export actually used vars
-              #       - never print/log those, or at least sensitive ones
-              #       - use consistent/proper/clear var names
-              #       - handle multiline/quoted/... vars correctly
-              export AWSAccountID='${AWS::AccountId}'
-              export AwsKubectlVersion='${AwsKubectlVersion}'
-              export BuildClusterBuildServiceArn='${BuildClusterBuildServiceArn}'
-              export BuildClusterName='${BuildClusterName}'
-              export BuildClusterWorkloadArn='${BuildClusterWorkloadArn}'
-              export ClusterArch='${ClusterArch}'
-              export ClusterEssentialsBundleFileHash='${ClusterEssentialsBundleFileHash}'
-              export ClusterEssentialsBundleRepo='${ClusterEssentialsBundleRepo}'
-              export ClusterEssentialsBundleVersion='${ClusterEssentialsBundleVersion}'
-              export DockerCredPassVersion='${DockerCredPassVersion}'
-              export EKSClusterName='${EKSClusterName}'
-              export IterateClusterBuildServiceArn='${IterateClusterBuildServiceArn}'
-              export IterateClusterName='${IterateClusterName}'
-              export IterateClusterWorkloadArn='${IterateClusterWorkloadArn}'
-              export PivNetVersion='${PivNetVersion}'
-              export PrivateHostedZone='${PrivateHostedZone}'
-              export QSS3BucketPath='${QSS3BucketPath}'
-              export RunClusterName='${RunClusterName}'
-              export SampleAppConfig='${SampleAppConfig}'
-              export SampleAppNamespace='${SampleAppNamespace}'
-              export SampleAppName='${SampleAppName}'
-              export TAPBuildServiceRepo_RepositoryUri='${TAPBuildServiceRepo.RepositoryUri}'
-              export TAPClusterEssentialsBundleRepo_RepositoryUri='${TAPClusterEssentialsBundleRepo.RepositoryUri}'
-              export TAPDomainName='${TAPDomainName}'
-              export TAPLogGroup='${TAPLogGroup}'
-              export TAPPackagesRepo_RepositoryUri='${TAPPackagesRepo.RepositoryUri}'
-              export TAPRepo='${TAPRepo}'
-              export TAPVersion='${TAPVersion}'
-              export TAPWorkloadRepo_RepositoryUri='${TAPWorkloadRepo.RepositoryUri}'
-              export TanzuNetRegistryServer='${TanzuNetRegistryServer}'
-              export TanzuNetRelocateImages='${TanzuNetRelocateImages}'
-              export TanzuNetSecretCredentials='${TanzuNetSecretCredentials}'
-              export ViewClusterName='${ViewClusterName}'
-
-              # WaitConditionHanldes
-              export CloudInitHandle='${CloudInitHandle}'
-              export TAPInstallHandle='${TAPInstallHandle}'
-              export TAPWorkloadInstallHandle='${TAPWorkloadInstallHandle}'
-              export TAPTestsHandle='${TAPTestsHandle}'
-            set -x
 
             arch=$(dpkg --print-architecture)
 
@@ -2166,74 +2215,33 @@ Resources:
             # TODO: use mktemp and a trap to clean up (or use an AMI with AWS CLI preinstalled)
             # Note: the Ubuntu AMI seems to come with `wget` and `curl` already installed
             echo "Installing aws cli..."
-            pushd /tmp
-            wget -O "./awscliv2.zip" "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip"
-            unzip ./awscliv2.zip
-            ./aws/install
+              pushd /tmp
+              wget -O "./awscliv2.zip" "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip"
+              unzip ./awscliv2.zip
+              ./aws/install
             popd
 
             echo "Installing aws-cfn-bootstrap tools & setting signal trap"
             pip3 install "https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-py3-latest.tar.gz"
 
-            # Set and export the cfn trap
-            cfnSignal() {
-              local -
-              set +x
-
-              local rc="${!1:-42}"
-              local handleURL="${!2:-${CloudInitHandle}}"
-              local reason='installation succeeded'
-              local ctxLines=10
-
-              (( rc != 0 )) && {
-                local nl=$'\n'
-                # We don't care about the last 3 lines of the log, because
-                # that's logging the cfnSignal itself.
-                reason="${!nl}$( tail -n $(( ctxLines + 3 )) /var/log/cloud-init-output.log | head -n -3 )${!nl}"
-              }
-
-              cfn-signal --region "${!AWS_REGION}" --exit-code "$rc" --reason "$reason" "$handleURL" \
-                || echo >&2 'could not run cfn-signal'
-            }
-            export -f cfnSignal
-            trap 'cfnSignal $?' ERR
-
-            cInit="${!QSS3BucketPath}/src/cloud-init.sh"
-            echo "kicking off cloud-init from '${!cInit}'"
-            bash -xe <(
-              aws s3 cp --no-progress "${!cInit}" -
-            )
-
-            cfnSignal 0
-          - AwsKubectlVersion: !FindInMap [ Versions, current, Kubectl ]
-            TAPVersion: !FindInMap [ Versions, current, TAP ]
-            ClusterEssentialsBundleRepo: tanzu-cluster-essentials/cluster-essentials-bundle
-            ClusterEssentialsBundleFileHash: !FindInMap [ Versions, current, ClusterEssentialsHash ]
-            ClusterEssentialsBundleVersion: !FindInMap [ Versions, current, ClusterEssentialsVersion ]
-            DockerCredPassVersion: !FindInMap [ Versions, current, DockerCredPass ]
-            PivNetVersion: !FindInMap [ Versions, current, PivNet ]
-            SampleAppConfig: !FindInMap [Apps, Sample, Config]
-            SampleAppNamespace: !FindInMap [Apps, Sample, Namespace]
-            SampleAppName: !FindInMap [Apps, Sample, Name]
-            QSS3BucketPath: !Sub
-              - s3://${S3Bucket}/${QSS3KeyPrefix}tap-setup-scripts
-              - S3Bucket: !If [UsingDefaultBucket, !Sub '${QSS3BucketName}-${AWS::Region}', !Ref QSS3BucketName]
-            TanzuNetRegistryServer: !FindInMap [TanzuNetRegistryServer, Server, Name]
-            TAPRepo: tanzu-application-platform/tap-packages
-            ClusterArch: !Ref TAPClusterArch
-            BuildClusterName: !If [CreateMultiCluster, !GetAtt BUILDEKSQSStack.Outputs.EKSClusterName, !GetAtt EKSQSStack.Outputs.EKSClusterName]
-            BuildClusterBuildServiceArn: !If [CreateMultiCluster, !GetAtt BUILDBuildServiceIamRole.Arn, !GetAtt TAPBuildServiceIamRole.Arn]
-            BuildClusterWorkloadArn: !If [CreateMultiCluster, !GetAtt BUILDWorkloadIamRole.Arn, !GetAtt TAPWorkloadIamRole.Arn]
-            IterateClusterName: !If [CreateMultiCluster, !GetAtt ITERATEEKSQSStack.Outputs.EKSClusterName, ""]
-            IterateClusterBuildServiceArn: !If [CreateMultiCluster, !GetAtt ITERATEBuildServiceIamRole.Arn, ""]
-            IterateClusterWorkloadArn: !If [CreateMultiCluster, !GetAtt ITERATEWorkloadIamRole.Arn, ""]
-            RunClusterName: !If [CreateMultiCluster, !GetAtt RUNEKSQSStack.Outputs.EKSClusterName, ""]
-            ViewClusterName: !If [CreateMultiCluster, !GetAtt VIEWEKSQSStack.Outputs.EKSClusterName, ""]
-
-            CloudInitHandle:          !Ref PhaseCloudInitHandle
-            TAPInstallHandle:         !Ref PhaseTAPInstallHandle
-            TAPWorkloadInstallHandle: !Ref PhaseTAPWorkloadInstallHandle
-            TAPTestsHandle:           !Ref PhaseTAPTestsHandle
+            cfn-init -v --stack '${AWS::StackName}' --resource UbuntuBastionLaunchTemplate --region '${AWS::Region}'
+            #! NOTE: don't run anything after cfn-init; errors might be swallowed.
+  UbuntuBastion:
+  # TODO: Implement CloudFormation helper scripts once Ubuntu 22.04 is
+  # supported.
+    Type: AWS::EC2::Instance
+    Metadata:
+      cfn-lint: { config: { ignore_checks: [I3042] } }
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref UbuntuBastionLaunchTemplate
+        Version: !GetAtt [UbuntuBastionLaunchTemplate, DefaultVersionNumber]
+      SubnetId: !Ref PublicSubnet1Id
+      Tags:
+        - Key: Name
+          Value: VMwareLinuxBastionInstance
+        - Key: Description
+          Value: VMware Tanzu Application Platform EKS cluster bootstrap instance.
 
   # Phase for the whole cloud-init process
   # from the creation of the instance to finished cloud-init run
