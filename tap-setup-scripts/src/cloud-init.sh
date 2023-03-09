@@ -43,6 +43,18 @@ cat <<EOF >> /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
             "file_path": "/var/log/cloud-init-output.log",
             "log_group_name": "${TAPLogGroup}",
             "log_stream_name": "{instance_id}_/var/log/cloud-init-output.log"
+          }, {
+            "file_path": "/var/log/cfn-wire.log",
+            "log_group_name": "${TAPLogGroup}",
+            "log_stream_name": "{instance_id}_/var/log/cfn-wire.log"
+          }, {
+            "file_path": "/var/log/cfn-init.log",
+            "log_group_name": "${TAPLogGroup}",
+            "log_stream_name": "{instance_id}_/var/log/cfn-init.log"
+          }, {
+            "file_path": "/var/log/cfn-init-cmd.log",
+            "log_group_name": "${TAPLogGroup}",
+            "log_stream_name": "{instance_id}_/var/log/cfn-init-cmd.log"
           }
         ]
       }
