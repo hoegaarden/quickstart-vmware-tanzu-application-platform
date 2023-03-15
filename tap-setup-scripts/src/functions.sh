@@ -63,31 +63,29 @@ function installTanzuCLI {
 
   banner "Downloading kapp, secretgen configuration bundle & tanzu cli"
 
-  mkdir -p $DOWNLOADS
+  mkdir -p "${DOWNLOADS}"
 
-  if [[ ! -f $DOWNLOADS/tanzu-cluster-essentials/install.sh ]]
+  local accessTokenHeader productFileName arch
+
+  arch="$(dpkg --print-architecture)"
+
+  if [[ ! -f "${DOWNLOADS}/tanzu-cluster-essentials/install.sh" ]]
   then
-    pivnet login --api-token="$PIVNET_TOKEN"
+    read -r accessTokenHeader < <(tanzunet::accessTokenHeader <<< "$PIVNET_TOKEN")
 
-    ESSENTIALS_FILE_NAME="tanzu-cluster-essentials-linux-$(dpkg --print-architecture)-$ESSENTIALS_VERSION.tgz"
+    productFileName="tanzu-cluster-essentials-linux-${arch}-${ESSENTIALS_VERSION}.tgz"
 
-    ESSENTIALS_FILE_ID=$(pivnet product-files \
-      -p tanzu-cluster-essentials \
-      -r $ESSENTIALS_VERSION \
-     --format=json | jq ".[] | select(.name == \"$ESSENTIALS_FILE_NAME\").id" )
+    tanzunet::downloadProductFile \
+      'tanzu-cluster-essentials' "${ESSENTIALS_VERSION}" "${productFileName}"
+      "${DOWNLOADS}/${productFileName}" \
+      <<< "$accessTokenHeader"
 
-    pivnet download-product-files \
-      --download-dir $DOWNLOADS \
-      --product-slug='tanzu-cluster-essentials' \
-      --release-version=$ESSENTIALS_VERSION \
-      --product-file-id=$ESSENTIALS_FILE_ID
-
-    mkdir -p $DOWNLOADS/tanzu-cluster-essentials
-    tar xvf $DOWNLOADS/$ESSENTIALS_FILE_NAME -C $DOWNLOADS/tanzu-cluster-essentials
-    sudo cp $DOWNLOADS/tanzu-cluster-essentials/imgpkg /usr/local/bin/
-    sudo cp $DOWNLOADS/tanzu-cluster-essentials/kapp /usr/local/bin/
-    sudo cp $DOWNLOADS/tanzu-cluster-essentials/kbld /usr/local/bin/
-    sudo cp $DOWNLOADS/tanzu-cluster-essentials/ytt /usr/local/bin/
+    mkdir -p "${DOWNLOADS}/tanzu-cluster-essentials"
+    tar xvf "${DOWNLOADS}/${productFileName}" -C "${DOWNLOADS}/tanzu-cluster-essentials"
+    sudo cp "${DOWNLOADS}/tanzu-cluster-essentials/imgpkg" /usr/local/bin/
+    sudo cp "${DOWNLOADS}/tanzu-cluster-essentials/kapp"   /usr/local/bin/
+    sudo cp "${DOWNLOADS}/tanzu-cluster-essentials/kbld"   /usr/local/bin/
+    sudo cp "${DOWNLOADS}/tanzu-cluster-essentials/ytt"    /usr/local/bin/
   else
     echo "tanzu-cluster-essentials already present"
   fi
@@ -98,27 +96,27 @@ function installTanzuCLI {
     mkdir -p $TANZU_DIR
     export TANZU_CLI_NO_INIT=true
 
-    pivnet login --api-token="$PIVNET_TOKEN"
+    read -r accessTokenHeader < <(tanzunet::accessTokenHeader <<< "$PIVNET_TOKEN")
 
-    TANZUCLI_FILE_ID=$(pivnet product-files \
-      -p tanzu-application-platform \
-      -r $TAP_VERSION \
-      --format=json | jq '.[] | select(.name == "tanzu-framework-bundle-linux").id' )
+    productFileName='tanzu-framework-bundle-linux'
 
-    pivnet download-product-files \
-      --download-dir $DOWNLOADS \
-      --product-slug='tanzu-application-platform' \
-      --release-version=$TAP_VERSION \
-      --product-file-id=$TANZUCLI_FILE_ID
+    tanzunet::downloadProductFile \
+      'tanzu-application-platform' "${TAP_VERSION}" "${productFileName}"
+      "${DOWNLOADS}/${productFileName}" \
+      <<< "$accessTokenHeader"
 
-    TANZUCLI_FILE_NAME=`ls $DOWNLOADS/tanzu-framework-linux-*`
-    # echo TANZUCLI_FILE_NAME $TANZUCLI_FILE_NAME
-    tar xvf $TANZUCLI_FILE_NAME -C $TANZU_DIR
+    tar xvf "${DONWLOADS}/${productFileName}" -C "${TANZU_DIR}"
     export TANZU_CLI_NO_INIT=true
-    MOST_RECENT_CLI=$(find $TANZU_DIR/cli/core/ -name tanzu-core-linux_$(dpkg --print-architecture) | xargs ls -t | head -n 1)
+
+    MOST_RECENT_CLI="$(
+      find "${TANZU_DIR}/cli/core/" -name "tanzu-core-linux_${arch}" \
+        | xargs ls -t \
+        | head -n 1
+    )"
+
     echo "Installing Tanzu CLI"
-    sudo install -m 0755 $MOST_RECENT_CLI /usr/local/bin/tanzu
-    pushd $TANZU_DIR
+    sudo install -m 0755 "${MOST_RECENT_CLI}" /usr/local/bin/tanzu
+    pushd "${TANZU_DIR}"
     tanzu plugin install --local cli all
     popd
   else
@@ -818,4 +816,134 @@ function tapWorkloadApplyDeliverable {
   # workaround to see target-cluster in tap-gui
   kubectl patch deliverable ${SAMPLE_APP_NAME} -n ${DEVELOPER_NAMESPACE} --type merge --patch "{\"metadata\":{\"labels\":{\"carto.run/workload-name\":\"${SAMPLE_APP_NAME}\",\"carto.run/workload-namespace\":\"${DEVELOPER_NAMESPACE}\"}}}"
 
+}
+
+##---- all things tanzunet ----
+readonly TANZUNET_BASE_URI='https://network.tanzu.vmware.com'
+readonly TANZUNET_USER_AGENT='TAPPC tanzunet client'
+
+tanzunet::log() {
+  echo >&2 'tanzunet-client:' "$@"
+}
+
+tanzunet::curl() {
+  local uri="$1" ; shift
+  local -a args=( "$@" )
+
+  [[ "$uri" == "$TANZUNET_BASE_URI"* ]] || {
+    uri="${TANZUNET_BASE_URI}/${uri}"
+  }
+
+  [[ -t 0 ]] || args+=( '-H' '@-' )
+
+  curl \
+    -A "$TANZUNET_USER_AGENT" \
+    --retry 2 \
+    --fail --show-error --silent --location \
+    "${uri}" \
+    "${args[@]}"
+}
+
+tanzunet::releaseDetails() {
+  local slug="$1"
+  local version="$2"
+
+  local tokenHeader
+
+  IFS= read -r tokenHeader
+
+  tanzunet::curl "api/v2/products/${slug}/releases" <<< "$tokenHeader" \
+    | jq -re --arg version "$version" '.releases[] | select(.version == $version)'
+}
+
+tanzunet::productFileDetails() {
+  local slug="$1"
+  local version="$2"
+  local fileRE="$3"
+
+  local rc=0 tokenHeader releaseDetails productFilesURI fileGroupsURI
+
+  IFS= read -r tokenHeader
+
+  releaseDetails="$(
+    tanzunet::releaseDetails "$slug" "$version" <<< "$tokenHeader"
+  )" || {
+    rc=$?
+    tanzunet::log "unable to get release details for '${slug}/${version}'"
+    return $rc
+  }
+
+  productFilesURI="$( jq -re '._links.product_files.href' <<< "$releaseDetails" )" || {
+    rc=$?
+    tanzunet::log "unable to get product files URI for '${slug}/${version}'"
+    return $rc
+  }
+
+  # ---- try product files first ----
+  {
+    tanzunet::curl "$productFilesURI" <<< "$tokenHeader" \
+      | jq --arg re "$fileRE" -re '( .product_files[] | select(.name|test($re)) ) // empty'
+  } && return
+
+
+  # ---- else, try the file groups ----
+  fileGroupsURI="$( jq -re '._links.file_groups.href' <<< "$releaseDetails" )" || {
+    rc=$?
+    tanzunet::log "unable to get file groups URI for '${slug}/${version}'"
+    return $rc
+  }
+
+  {
+    tanzunet::curl "$fileGroupsURI" <<< "$tokenHeader" \
+      | jq --arg re "$fileRE" -re '( .file_groups[].product_files[] | select(.name|test($re)) ) // empty'
+  } && return
+
+
+  # ---- else, abort ----
+  return 1
+}
+
+tanzunet::downloadProductFile() {
+  local slug="$1"
+  local version="$2"
+  local fileRE="$3"
+  local destination="$4"
+
+  local tokenHeader fileDetails fileName downloadURI checksum rc=0
+
+  IFS= read -r tokenHeader
+
+  fileDetails="$(
+    tanzunet::productFileDetails "$slug" "$version" "$fileRE" <<< "$tokenHeader"
+  )" || {
+    rc=$?
+    tanzunet::log "unable to get product file details for '${slug}/${version}/${fileRE}'"
+    return $rc
+  }
+
+  IFS=$'\t' read -r fileName downloadURI checksum < <(
+    jq -re '[ .name, ._links.download.href, .sha256 ] | @tsv' <<< "$fileDetails"
+  )
+
+  tanzunet::curl "$downloadURI" -o "$destination" --retry 4 <<< "$tokenHeader" || rc=$?
+
+  (( rc != 0 )) && {
+    rm -f -- "$destination"
+    return $rc
+  }
+
+  sha256sum --quiet --strict --status --check <(echo "${checksum}  ${destination}") || rc=$?
+
+  (( rc != 0 )) && {
+    rm -f -- "$destination"
+    return $rc
+  }
+
+  tanzunet::log "successfully downloaded '${slug}/${version}/${fileName}' to '${destination}'"
+}
+
+tanzunet::accessTokenHeader() {
+  tanzunet::curl 'api/v2/authentication/access_tokens' -X POST -d @- <<< "$(
+    jq -re --raw-input '{refresh_token: .}' < /dev/stdin
+  )" | jq -re '"Authorization: Bearer \(.access_token)"'
 }
