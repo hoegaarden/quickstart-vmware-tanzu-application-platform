@@ -4,6 +4,7 @@ Description: >-
   (TAP) on Amazon EKS in an existing VPC.
   **WARNING** This template creates AWS resources. You will be billed for the
   AWS resources used if you create a stack from this template. (qs-1t1t2pssu)
+Transform: 'AWS::Serverless-2016-10-31'
 Metadata:
   LICENSE: Apache License, Version 2.0
   QuickStartDocumentation:
@@ -657,6 +658,27 @@ Conditions:
   # UseEcr: !Equals [!Ref TanzuNetRelocateImages, 'Yes']
   UsingDefaultBucket: !Equals [!Ref QSS3BucketName, aws-quickstart]
 Resources:
+
+  CA:
+    Type: 'Custom::CA'
+    Properties:
+      ServiceToken: !GetAtt CACreator.Arn
+      Region: !Ref "AWS::Region"
+      CommonName: 'some common name'
+
+  CACreator:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      Timeout: 30
+      MemorySize: 128
+      Runtime: go1.x
+      Handler: handler
+      Description: Create a self-signed CA key pair
+      PackageType: Zip
+      CodeUri:
+        Bucket: !If [UsingDefaultBucket, !Sub '${QSS3BucketName}-${AWS::Region}', !Ref QSS3BucketName]
+        Key: !Sub '${QSS3KeyPrefix}functions/packages/CAGenerator/CAGenerator.zip'
+  
   TanzuNetSecretCredentials:
     Type: AWS::SecretsManager::Secret
     Properties:
@@ -664,12 +686,20 @@ Resources:
         - '${StackId}/TanzuNetCredentials'
         - StackId: !Select [2, !Split [/, !Ref AWS::StackId]]
       Description: The VMware Tanzu Network credentials.
-      SecretString: !Sub >-
-        {
-          "username": "${TanzuNetUsername}",
-          "password": "${TanzuNetPassword}",
-          "token": "${TanzuNetApiToken}"
-        }
+      SecretString: !Sub
+        - >-
+          {
+            "username": "${TanzuNetUsername}",
+            "password": "${TanzuNetPassword}",
+            "token": "${TanzuNetApiToken}",
+            "ca": {
+              "priv": "${priv}",
+              "pub": "${pub}"
+            }
+          }
+        - priv: !GetAtt CA.priv
+          pub:  !GetAtt CA.pub
+
   TAPPackagesRepo:
     Type: AWS::ECR::Repository
     # TODO: Flip back to delete if/when possible for CloudFormation to delete
@@ -2462,6 +2492,13 @@ Resources:
       InstanceId: !Ref WindowsBastion
       AllocationId: !GetAtt WindowsBastionEIP.AllocationId
 Outputs:
+  PrivKey:
+    Value: !GetAtt CA.priv
+    Description: a private key
+  PubKey:
+    Value: !GetAtt CA.pub
+    Description: a public key
+
   LinuxBastionEIP:
     Description: >-
       The public IP address of the Linux bastion host / bootstrap instance.

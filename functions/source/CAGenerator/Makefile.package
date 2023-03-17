@@ -1,0 +1,7 @@
+.PHONY: package
+
+package:
+	go mod tidy
+	env CGO_ENABLED=0 GOARCH=amd64 GOOS=linux go build -o handler main.go
+	find . -exec touch -t 202007010000.00 {} +
+	zip -Xr CAGenerator.zip ./handler
