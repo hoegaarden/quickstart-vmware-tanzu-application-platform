@@ -497,6 +497,12 @@ Mappings:
       ClusterEssentialsHash: sha256:2354688e46d4bb4060f74fca069513c9b42ffa17a0a6d5b0dbb81ed52242ea44
       OmCLI: 7.9.0
       DockerCredPass:  0.7.0
+  Configs:
+    current:
+      #! for eks stack
+      EKSPublicAccessEndpoint: Enabled #! Enabled, Disabled
+      #! for eks advanced config stack
+      EKSPublicAccessCIDRs: 0.0.0.0/0
   AwsAmiRegionMap:
     af-south-1:
       US2204HVM: '{{resolve:ssm:/aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id}}'
@@ -748,6 +754,7 @@ Resources:
         ConfigSetName: !Ref AWS::StackName
         NodeVolumeSize: !Ref NodeVolumeSize
         KubernetesVersion: !FindInMap [ Versions, current, EKS ]
+        EKSPublicAccessCIDRs: !FindInMap [ Configs, current, EKSPublicAccessCIDRs ]
   AutoDetectSharedResources:
     Type: AWS::CloudFormation::Stack
     Properties:
@@ -783,7 +790,7 @@ Resources:
           - !Ref PrivateSubnet3Id
           - !Ref AWS::NoValue
         RemoteAccessCIDR: !Ref RemoteAccessCidr
-        EKSPublicAccessEndpoint: Disabled
+        EKSPublicAccessEndpoint: !FindInMap [ Configs, current, EKSPublicAccessEndpoint ]
         AdditionalEKSAdminRoleArn: !GetAtt LinuxBastionIamRole.Arn
         KeyPairName: !Ref KeyPairName
         NumberOfNodes: !Ref NumberOfNodes
@@ -822,7 +829,7 @@ Resources:
           - !Ref PrivateSubnet3Id
           - !Ref AWS::NoValue
         RemoteAccessCIDR: !Ref RemoteAccessCidr
-        EKSPublicAccessEndpoint: Disabled
+        EKSPublicAccessEndpoint: !FindInMap [ Configs, current, EKSPublicAccessEndpoint ]
         AdditionalEKSAdminRoleArn: !GetAtt LinuxBastionIamRole.Arn
         KeyPairName: !Ref KeyPairName
         NumberOfNodes: !Ref NumberOfNodes
@@ -860,7 +867,7 @@ Resources:
           - !Ref PrivateSubnet3Id
           - !Ref AWS::NoValue
         RemoteAccessCIDR: !Ref RemoteAccessCidr
-        EKSPublicAccessEndpoint: Disabled
+        EKSPublicAccessEndpoint: !FindInMap [ Configs, current, EKSPublicAccessEndpoint ]
         AdditionalEKSAdminRoleArn: !GetAtt LinuxBastionIamRole.Arn
         KeyPairName: !Ref KeyPairName
         NumberOfNodes: !Ref NumberOfNodes
@@ -898,7 +905,7 @@ Resources:
           - !Ref PrivateSubnet3Id
           - !Ref AWS::NoValue
         RemoteAccessCIDR: !Ref RemoteAccessCidr
-        EKSPublicAccessEndpoint: Disabled
+        EKSPublicAccessEndpoint: !FindInMap [ Configs, current, EKSPublicAccessEndpoint ]
         AdditionalEKSAdminRoleArn: !GetAtt LinuxBastionIamRole.Arn
         KeyPairName: !Ref KeyPairName
         NumberOfNodes: !Ref NumberOfNodes
@@ -936,7 +943,7 @@ Resources:
           - !Ref PrivateSubnet3Id
           - !Ref AWS::NoValue
         RemoteAccessCIDR: !Ref RemoteAccessCidr
-        EKSPublicAccessEndpoint: Disabled
+        EKSPublicAccessEndpoint: !FindInMap [ Configs, current, EKSPublicAccessEndpoint ]
         AdditionalEKSAdminRoleArn: !GetAtt LinuxBastionIamRole.Arn
         KeyPairName: !Ref KeyPairName
         NumberOfNodes: !Ref NumberOfNodes
